@@ -57,6 +57,7 @@ def main():
 
     cfg = config.load_config(args.config, 'configs/ESLAM.yaml')
     
+    # 关键处, Class ESLAM()
     eslam = ESLAM(cfg, args)
 
     eslam.run()

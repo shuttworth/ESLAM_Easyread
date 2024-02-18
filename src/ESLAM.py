@@ -191,6 +191,7 @@ class ESLAM():
                             bound_dividable).int()+1)*bound_dividable+self.bound[:, 0]
         self.shared_decoders.bound = self.bound
 
+    # 函数作用是初始化特征平面(三轴平面，xy xz yz)
     def init_planes(self, cfg):
         """
         Initialize the feature planes.
@@ -198,13 +199,17 @@ class ESLAM():
         Args:
             cfg (dict): parsed config dict.
         """
+        # 从配置中提取粗糙和细致特征平面的分辨率
         self.coarse_planes_res = cfg['planes_res']['coarse']
         self.fine_planes_res = cfg['planes_res']['fine']
 
+        # 从配置中提取颜色特征平面的粗糙和细致分辨率
         self.coarse_c_planes_res = cfg['c_planes_res']['coarse']
         self.fine_c_planes_res = cfg['c_planes_res']['fine']
 
+        # 从配置中提取颜色维度
         c_dim = cfg['model']['c_dim']
+        # 计算空间边界的长度
         xyz_len = self.bound[:, 1]-self.bound[:, 0]
 
         ####### Initializing Planes ############
@@ -214,13 +219,18 @@ class ESLAM():
         c_planes_res = [self.coarse_c_planes_res, self.fine_c_planes_res]
 
         planes_dim = c_dim
+        # 遍历每个分辨率，初始化特征平面和颜色特征平面
         for grid_res in planes_res:
+            # 根据[空间边界]和[分辨率]计算[网格形状]
             grid_shape = list(map(int, (xyz_len / grid_res).tolist()))
+            # 交换x和z维度，以适应特定空间布局
             grid_shape[0], grid_shape[2] = grid_shape[2], grid_shape[0]
+            # 使用高斯分布随机初始化特征平面
             planes_xy.append(torch.empty([1, planes_dim, *grid_shape[1:]]).normal_(mean=0, std=0.01))
             planes_xz.append(torch.empty([1, planes_dim, grid_shape[0], grid_shape[2]]).normal_(mean=0, std=0.01))
             planes_yz.append(torch.empty([1, planes_dim, *grid_shape[:2]]).normal_(mean=0, std=0.01))
 
+        # 类似地，初始化颜色特征平面
         for grid_res in c_planes_res:
             grid_shape = list(map(int, (xyz_len / grid_res).tolist()))
             grid_shape[0], grid_shape[2] = grid_shape[2], grid_shape[0]
@@ -228,6 +238,7 @@ class ESLAM():
             c_planes_xz.append(torch.empty([1, planes_dim, grid_shape[0], grid_shape[2]]).normal_(mean=0, std=0.01))
             c_planes_yz.append(torch.empty([1, planes_dim, *grid_shape[:2]]).normal_(mean=0, std=0.01))
 
+        # 将初始化的特征平面和颜色特征平面,存储于类属性中
         self.shared_planes_xy = planes_xy
         self.shared_planes_xz = planes_xz
         self.shared_planes_yz = planes_yz
