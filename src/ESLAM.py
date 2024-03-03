@@ -219,7 +219,7 @@ class ESLAM():
         c_planes_res = [self.coarse_c_planes_res, self.fine_c_planes_res]
 
         planes_dim = c_dim
-        # 遍历每个分辨率，初始化特征平面和颜色特征平面
+        # 遍历每个分辨率，初始化几何特征平面和颜色特征平面
         for grid_res in planes_res:
             # 根据[空间边界]和[分辨率]计算[网格形状]
             grid_shape = list(map(int, (xyz_len / grid_res).tolist()))

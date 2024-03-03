@@ -113,10 +113,11 @@ class Decoders(nn.Module):
             # vgrid[..., [0, 1]]: 索引 [0, 1] 选择了其中的X和Y坐标，用于在XY平面上进行采样；同理，xz平面是索引[0, 2]，yz平面是索引[1, 2]
             # padding_mode='border': 指定了当采样点落在输入数据的边界之外时的行为。'border' 表示会使用边界上的值
             # mode='bilinear': 指定了采样使用的插值方法，'bilinear' 表示双线性插值
-            ### 论文对照：以上内容对应论文的公式(1)与公式(2)
 
             # 将三个方向的特征相加并存储到feat中
             feat.append(xy + xz + yz)
+            ### 论文对照：以上内容对应论文的公式(1)与公式(2)
+        
         # 将所有特征沿最后一个维度拼接起来
         feat = torch.cat(feat, dim=-1)
 

@@ -130,6 +130,9 @@ class Tracker(object):
         for p in self.decoders.parameters():
             p.requires_grad_(False)
 
+    # 函数作用：计算符号距离函数 (SDF) 的损失
+    # 输入 SDF值、采样深度值和地面真值深度
+    # 输出sdf_losses，表示 SDF 的自由空间损失、中心损失和尾部损失的加权和
     def sdf_losses(self, sdf, z_vals, gt_depth):
         """
         Computes the losses for a signed distance function (SDF) given its values, depth values and ground truth depth.
@@ -144,28 +147,40 @@ class Tracker(object):
         - sdf_losses: a scalar tensor representing the weighted sum of the free space, center, and tail losses of SDF
         """
 
+        # 创建四种掩码
+        # 第一种front_mask：标记点的掩码，这些点的深度小于[地面真值深度gt_depth-截断距离truncation]
         front_mask = torch.where(z_vals < (gt_depth[:, None] - self.truncation),
                                  torch.ones_like(z_vals), torch.zeros_like(z_vals)).bool()
 
+        # 第二种back_mask：标记点的掩码，这些点的深度大于[地面真值深度gt_depth+截断距离truncation]
         back_mask = torch.where(z_vals > (gt_depth[:, None] + self.truncation),
                                 torch.ones_like(z_vals), torch.zeros_like(z_vals)).bool()
 
+        # 第三种center_mask：标记点的掩码，这些点的深度深度在 (地面真值深度gt_depth - 0.4 * 截断距离truncation) 和 (地面真值深度gt_depth + 0.4 * 截断距离truncation) 之间
         center_mask = torch.where((z_vals > (gt_depth[:, None] - 0.4 * self.truncation)) *
                                   (z_vals < (gt_depth[:, None] + 0.4 * self.truncation)),
                                   torch.ones_like(z_vals), torch.zeros_like(z_vals)).bool()
 
+        # 第四种：除了上述三种情况之外的点的掩码(对这些掩码都执行非运算)
         tail_mask = (~front_mask) * (~back_mask) * (~center_mask)
 
+        # 自由空间损失，对应公式(6)
         fs_loss = torch.mean(torch.square(sdf[front_mask] - torch.ones_like(sdf[front_mask])))
+        
+        # 中心损失，对应公式(8)前半段
         center_loss = torch.mean(torch.square(
             (z_vals + sdf * self.truncation)[center_mask] - gt_depth[:, None].expand(z_vals.shape)[center_mask]))
+        
+        # 尾部损失，对应公式(8)后半段
         tail_loss = torch.mean(torch.square(
             (z_vals + sdf * self.truncation)[tail_mask] - gt_depth[:, None].expand(z_vals.shape)[tail_mask]))
 
+        # 以上三种损失加权得到sdf_losses
         sdf_losses = self.w_sdf_fs * fs_loss + self.w_sdf_center * center_loss + self.w_sdf_tail * tail_loss
 
         return sdf_losses
 
+    # 核心函数：相机位姿优化，内部包含重要函数get_samples，render_batch_ray等，计算loss损失并反向传播
     def optimize_tracking(self, cam_pose, gt_color, gt_depth, batch_size, optimizer):
         """
         Do one iteration of camera tracking. Sample pixels, render depth/color, calculate loss and backpropagation.
@@ -180,11 +195,14 @@ class Tracker(object):
         Returns:
             loss (float): The value of loss.
         """
+        # 变量的定义与初始化，注意这里用上了与NICE-SLAM不一样的all_planes，此参数后续传入render_batch_ray()函数[在Renderer.py中调用]
         all_planes = (self.planes_xy, self.planes_xz, self.planes_yz, self.c_planes_xy, self.c_planes_xz, self.c_planes_yz)
         device = self.device
         H, W, fx, fy, cx, cy = self.H, self.W, self.fx, self.fy, self.cx, self.cy
 
         c2w = cam_pose_to_matrix(cam_pose)
+
+        # 采样一批射线，得到方向和原点 (batch_rays_o, batch_rays_d)、以及对应的深度和颜色 (batch_gt_depth, batch_gt_color)
         batch_rays_o, batch_rays_d, batch_gt_depth, batch_gt_color = get_samples(self.ignore_edge_H, H-self.ignore_edge_H,
                                                                                  self.ignore_edge_W, W-self.ignore_edge_W,
                                                                                  batch_size, H, W, fx, fy, cx, cy, c2w,
@@ -205,22 +223,27 @@ class Tracker(object):
         batch_gt_depth = batch_gt_depth[inside_mask]
         batch_gt_color = batch_gt_color[inside_mask]
 
+        # 调用重要函数render_batch_ray()，此函数在Renderer.py里已经给大家仔细讲解
+        # 从返回值中可以拿到深度，颜色，sdf，深度，用于下述环节计算losses
         depth, color, sdf, z_vals = self.renderer.render_batch_ray(all_planes, self.decoders, batch_rays_d, batch_rays_o,
                                                                    self.device, self.truncation, gt_depth=batch_gt_depth)
 
+        ## 此部分继承了NICE-SLAM的动态处理模块"Robust to Dynamic Objects"，滤除超过10倍中值深度误差的值
         ## Filtering the rays for which the rendered depth error is greater than 10 times of the median depth error
         depth_error = (batch_gt_depth - depth.detach()).abs()
         error_median = depth_error.median()
         depth_mask = (depth_error < 10 * error_median)
 
-        ## SDF losses
+        ## SDF losses，内部有公式(6)-(8)的对应
         loss = self.sdf_losses(sdf[depth_mask], z_vals[depth_mask], batch_gt_depth[depth_mask])
 
-        ## Color Loss
+        ## Color Loss，对应公式(10)
         loss = loss + self.w_color * torch.square(batch_gt_color - color)[depth_mask].mean()
 
-        ### Depth loss
+        ### Depth loss，对应公式(9)
         loss = loss + self.w_depth * torch.square(batch_gt_depth[depth_mask] - depth[depth_mask]).mean()
+        
+        ### 截止以上，loss不断累加直至完毕，此对应着公式(11)
 
         optimizer.zero_grad()
         loss.backward()
@@ -236,8 +259,10 @@ class Tracker(object):
             if self.verbose:
                 print('Tracking: update the parameters from mapping')
 
+            # 更新解码器参数
             self.decoders.load_state_dict(self.shared_decoders.state_dict())
 
+            # 更新平面参数
             for planes, self_planes in zip(
                     [self.shared_planes_xy, self.shared_planes_xz, self.shared_planes_yz],
                     [self.planes_xy, self.planes_xz, self.planes_yz]):
@@ -279,6 +304,7 @@ class Tracker(object):
                 pbar.set_description(f"Tracking Frame {idx[0]}")
             idx = idx[0]
 
+            # 不再有NICE-SLAM里strict/loose/free的模式区分，此处仅保留“strict mapping and then tracking”
             # initiate mapping every self.every_frame frames
             if idx > 0 and (idx % self.every_frame == 1 or self.every_frame == 1):
                 while self.mapping_idx[0] != idx - 1:
@@ -300,26 +326,32 @@ class Tracker(object):
             else:
                 if self.const_speed_assumption and idx - 2 >= 0:
                     ## Linear prediction for initialization
+                    ## 基于恒定速度假设的预测
                     pre_poses = torch.stack([self.estimate_c2w_list[idx - 2], pre_c2w.squeeze(0)], dim=0)
                     pre_poses = matrix_to_cam_pose(pre_poses)
                     cam_pose = 2 * pre_poses[1:] - pre_poses[0:1]
                 else:
                     ## Initialize with the last known pose
+                    ## 未启用恒定速度假设时，用前一个姿态进行预测
                     cam_pose = matrix_to_cam_pose(pre_c2w)
 
                 T = torch.nn.Parameter(cam_pose[:, -3:].clone())
                 R = torch.nn.Parameter(cam_pose[:,:4].clone())
                 cam_para_list_T = [T]
                 cam_para_list_R = [R]
+                # Adam优化器optimizer_camera的初始化
                 optimizer_camera = torch.optim.Adam([{'params': cam_para_list_T, 'lr': self.cam_lr_T, 'betas':(0.5, 0.999)},
                                                      {'params': cam_para_list_R, 'lr': self.cam_lr_R, 'betas':(0.5, 0.999)}])
 
                 current_min_loss = torch.tensor(float('inf')).float().to(device)
+                # for循环内，优化相机姿态
                 for cam_iter in range(self.num_cam_iters):
                     cam_pose = torch.cat([R, T], -1)
 
+                    # 可视化
                     self.visualizer.save_imgs(idx, cam_iter, gt_depth, gt_color, cam_pose, all_planes, self.decoders)
 
+                    # 调用optimize_tracking()函数优化相机pose，记录最优current_min_loss
                     loss = self.optimize_tracking(cam_pose, gt_color, gt_depth, self.tracking_pixels, optimizer_camera)
                     if loss < current_min_loss:
                         current_min_loss = loss

@@ -126,6 +126,7 @@ class Mapper(object):
 
         self.H, self.W, self.fx, self.fy, self.cx, self.cy = eslam.H, eslam.W, eslam.fx, eslam.fy, eslam.cx, eslam.cy
 
+    # 与Tracker.py里的相似
     def sdf_losses(self, sdf, z_vals, gt_depth):
         """
         Computes the losses for a signed distance function (SDF) given its values, depth values and ground truth depth.
@@ -162,6 +163,7 @@ class Mapper(object):
 
         return sdf_losses
 
+    # 基于重叠区域选择关键帧
     def keyframe_selection_overlap(self, gt_color, gt_depth, c2w, num_keyframes, num_samples=8, num_rays=50):
         """
         Select overlapping keyframes to the current camera observation.
@@ -251,14 +253,17 @@ class Mapper(object):
         cfg = self.cfg
         device = self.device
 
+        # 1. 选择关键帧
         if len(keyframe_dict) == 0:
             optimize_frame = []
         else:
+            # 根据配置选择全局随机关键帧或基于重叠区域选择关键帧
             if self.keyframe_selection_method == 'global':
                 optimize_frame = random_select(len(self.keyframe_dict)-2, self.mapping_window_size-1)
             elif self.keyframe_selection_method == 'overlap':
                 optimize_frame = self.keyframe_selection_overlap(cur_gt_color, cur_gt_depth, cur_c2w, self.mapping_window_size-1)
 
+        # 添加最近两帧和当前帧进行优化
         # add the last two keyframes and the current frame(use -1 to denote)
         if len(keyframe_list) > 1:
             optimize_frame = optimize_frame + [len(keyframe_list)-1] + [len(keyframe_list)-2]
@@ -267,6 +272,8 @@ class Mapper(object):
 
         pixs_per_image = self.mapping_pixels//len(optimize_frame)
 
+        # 2. 参数准备
+        # 收集当前帧和选定关键帧的深度、颜色、估计相机位姿等信息
         decoders_para_list = []
         decoders_para_list += list(self.decoders.parameters())
 
@@ -304,6 +311,7 @@ class Mapper(object):
         gt_colors = torch.stack(gt_colors, dim=0)
         c2ws = torch.stack(c2ws, dim=0)
 
+        # 设置优化器
         if self.joint_opt:
             cam_poses = nn.Parameter(matrix_to_cam_pose(c2ws[1:]))
 
@@ -317,6 +325,7 @@ class Mapper(object):
                                           {'params': planes_para, 'lr': 0},
                                           {'params': c_planes_para, 'lr': 0}])
 
+        # 设置学习率
         optimizer.param_groups[0]['lr'] = cfg['mapping']['lr']['decoders_lr'] * lr_factor
         optimizer.param_groups[1]['lr'] = cfg['mapping']['lr']['planes_lr'] * lr_factor
         optimizer.param_groups[2]['lr'] = cfg['mapping']['lr']['c_planes_lr'] * lr_factor
@@ -324,6 +333,7 @@ class Mapper(object):
         if self.joint_opt:
             optimizer.param_groups[3]['lr'] = self.joint_opt_cam_lr
 
+        # 3. 迭代训练
         for joint_iter in range(iters):
             if (not (idx == 0 and self.no_vis_on_first_frame)):
                 self.visualizer.save_imgs(idx, joint_iter, cur_gt_depth, cur_gt_color, cur_c2w, all_planes, self.decoders)
@@ -338,6 +348,7 @@ class Mapper(object):
                 0, H, 0, W, pixs_per_image, H, W, fx, fy, cx, cy, c2ws_, gt_depths, gt_colors, device)
 
             # should pre-filter those out of bounding box depth value
+            # 过滤不在场景范围内
             with torch.no_grad():
                 det_rays_o = batch_rays_o.clone().detach().unsqueeze(-1)
                 det_rays_d = batch_rays_d.clone().detach().unsqueeze(-1)
@@ -345,11 +356,13 @@ class Mapper(object):
                     device)-det_rays_o)/det_rays_d
                 t, _ = torch.min(torch.max(t, dim=2)[0], dim=1)
                 inside_mask = t >= batch_gt_depth
+            # 获取所有优化帧的射线原点、方向、真值深度和真值颜色信息
             batch_rays_d = batch_rays_d[inside_mask]
             batch_rays_o = batch_rays_o[inside_mask]
             batch_gt_depth = batch_gt_depth[inside_mask]
             batch_gt_color = batch_gt_color[inside_mask]
 
+            # 用渲染器渲染所有射线
             depth, color, sdf, z_vals = self.renderer.render_batch_ray(all_planes, self.decoders,batch_rays_d,
                                                                        batch_rays_o, device, self.truncation,
                                                                        gt_depth=batch_gt_depth)
@@ -368,6 +381,7 @@ class Mapper(object):
             loss.backward(retain_graph=False)
             optimizer.step()
 
+        # 4. 联合优化相机位姿
         if self.joint_opt:
             # put the updated camera poses back
             optimized_c2ws = cam_pose_to_matrix(cam_poses.detach())
@@ -409,6 +423,7 @@ class Mapper(object):
                 if idx == self.n_img-1: ## Last input frame
                     break
 
+                # 此处对应原来NICE-SLAM的strict策略
                 if idx % self.every_frame == 0 and idx != prev_idx:
                     break
 
@@ -436,8 +451,10 @@ class Mapper(object):
                 iters = cfg['mapping']['iters_first']
 
             ## Deciding if camera poses should be jointly optimized
+            # 是否执行联合优化
             self.joint_opt = (len(self.keyframe_list) > 4) and cfg['mapping']['joint_opt']
 
+            # 核心函数：self.optimize_mapping 方法进行map优化，传入当前迭代次数、学习率因子、索引、真实颜色和深度以及当前的相机姿态等
             cur_c2w = self.optimize_mapping(iters, lr_factor, idx, gt_color, gt_depth, gt_c2w,
                                             self.keyframe_dict, self.keyframe_list, cur_c2w)
 
@@ -451,6 +468,7 @@ class Mapper(object):
                                            'depth': gt_depth.to(self.keyframe_device), 'est_c2w': cur_c2w.clone()})
 
             init_phase = False
+            # 下方的值置为1，将唤醒NICE_SLAM.py里tracking线程，使其跳出等待，开始tracking
             self.mapping_first_frame[0] = 1     # mapping of first frame is done, can begin tracking
 
             if ((not (idx == 0 and self.no_log_on_first_frame)) and idx % self.ckpt_freq == 0) or idx == self.n_img-1:
@@ -459,6 +477,7 @@ class Mapper(object):
             self.mapping_idx[0] = idx
             self.mapping_cnt[0] += 1
 
+            # 得到mesh
             if (idx % self.mesh_freq == 0) and (not (idx == 0 and self.no_mesh_on_first_frame)):
                 mesh_out_file = f'{self.output}/mesh/{idx:05d}_mesh.ply'
                 self.mesher.get_mesh(mesh_out_file, all_planes, self.decoders, self.keyframe_dict, self.device)
