@@ -3,7 +3,7 @@
 <p align="center">
 
   <h1 align="center"> 
-  Co-SLAM-Easyread</h1>
+  ESLAM-Easyread</h1>
   <div align="center"></div>
 </p>
 <p align="center">
@@ -49,7 +49,7 @@ It is the supporting code annotation warehouse of the "NeRF-based SLAM course".
 More supporting videos come from here:
 
 <p align="left">
-  <img src="media/advertisement.jpg" width="260" alt="Advertisement">
+  <img src="advertisement.jpg" width="260" alt="Advertisement">
 </p>
 
 Others are the same with ESLAM, please refer to [https://github.com/idiap/ESLAM](https://github.com/idiap/ESLAM) for the Installation\Run\So on.
