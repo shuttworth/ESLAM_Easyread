@@ -468,7 +468,7 @@ class Mapper(object):
                                            'depth': gt_depth.to(self.keyframe_device), 'est_c2w': cur_c2w.clone()})
 
             init_phase = False
-            # 下方的值置为1，将唤醒NICE_SLAM.py里tracking线程，使其跳出等待，开始tracking
+            # 下方的值置为1，将唤醒ESLAM.py里tracking线程，使其跳出等待，开始tracking
             self.mapping_first_frame[0] = 1     # mapping of first frame is done, can begin tracking
 
             if ((not (idx == 0 and self.no_log_on_first_frame)) and idx % self.ckpt_freq == 0) or idx == self.n_img-1:
